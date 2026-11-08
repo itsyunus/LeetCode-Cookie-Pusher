@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  :root {
+    --bg: #0d0d14; --card: #13131d; --border: #252535;
+    --text: #e4e4e7; --dim: #6b6b80;
+    --amber: #f59e0b; --green: #22c55e; --red: #ef4444;
+    --ag: rgba(245,158,11,.12); --gg: rgba(34,197,94,.12); --rg: rgba(239,68,68,.12);
+  }
+  body { width:360px; font-family:'SF Mono','Fira Code','JetBrains Mono',monospace; background:var(--bg); color:var(--text); padding:0; }
+
+  .header { padding:18px 20px 14px; text-align:center; border-bottom:1px solid var(--border); }
+  .header h1 { font-size:.95rem; font-weight:700; letter-spacing:-.3px; }
+  .header p { font-size:.65rem; color:var(--dim); margin-top:4px; }
+
+  .body { padding:16px; }
+
+  /* Status */
+  .status { display:flex; align-items:center; gap:10px; padding:12px 14px; background:var(--card); border:1px solid var(--border); border-radius:10px; margin-bottom:14px; transition:all .3s; }
+  .status.ok { border-color:var(--green); box-shadow:0 0 20px var(--gg); }
+  .status.err { border-color:var(--red); box-shadow:0 0 20px var(--rg); }
+  .status.busy { border-color:var(--amber); box-shadow:0 0 20px var(--ag); }
+  .sdot { width:9px; height:9px; border-radius:50%; background:var(--dim); flex-shrink:0; transition:background .3s; }
+  .sdot.g { background:var(--green); } .sdot.r { background:var(--red); }
+  .sdot.p { background:var(--amber); animation:pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .smsg { font-size:.72rem; line-height:1.4; }
+
+  /* Cookie Info */
+  .cinfo { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px 14px; margin-bottom:14px; display:none; }
+  .cinfo.show { display:block; }
+  .crow { display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid rgba(255,255,255,.04); font-size:.7rem; }
+  .crow:last-child { border:none; }
+  .ck { color:var(--dim); } .cv { color:var(--green); font-weight:600; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* Steps */
+  .steps { display:flex; flex-direction:column; gap:8px; margin-bottom:14px; }
+  .step { display:flex; align-items:center; gap:10px; padding:11px 14px; background:var(--card); border:1px solid var(--border); border-radius:9px; cursor:pointer; transition:all .2s; position:relative; overflow:hidden; }
+  .step:hover:not(.off) { border-color:var(--amber); background:rgba(245,158,11,.04); }
+  .step.off { opacity:.3; cursor:not-allowed; pointer-events:none; }
+  .step.ok { border-color:var(--green); background:rgba(34,197,94,.04); }
+  .step.run { border-color:var(--amber); }
+  .step.run::after { content:''; position:absolute; bottom:0; left:0; height:2px; background:var(--amber); animation:bar 1.5s ease-in-out infinite; }
+  @keyframes bar { 0%{width:0} 50%{width:75%} 100%{width:100%} }
+  .snum { width:24px; height:24px; border-radius:6px; background:rgba(255,255,255,.05); display:flex; align-items:center; justify-content:center; font-size:.7rem; font-weight:700; flex-shrink:0; }
+  .step.ok .snum { background:var(--gg); color:var(--green); }
+  .step.run .snum { background:var(--ag); color:var(--amber); }
+  .slbl { flex:1; font-size:.73rem; font-weight:600; }
+  .sbdg { font-size:.6rem; padding:2px 7px; border-radius:4px; background:rgba(255,255,255,.05); color:var(--dim); }
+  .step.ok .sbdg { background:var(--gg); color:var(--green); }
+
+  /* Settings */
+  .settings { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px; }
+  .settings h3 { font-size:.65rem; color:var(--dim); text-transform:uppercase; letter-spacing:1.2px; margin-bottom:10px; }
+  .field { margin-bottom:10px; }
+  .field:last-child { margin-bottom:0; }
+  .field label { display:block; font-size:.65rem; color:var(--dim); margin-bottom:4px; }
+  .field input { width:100%; padding:8px 10px; background:rgba(0,0,0,.3); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:inherit; font-size:.72rem; outline:none; transition:border .2s; }
+  .field input:focus { border-color:var(--amber); }
+  .field input::placeholder { color:var(--dim); opacity:.5; }
+
+  .savebtn { width:100%; margin-top:10px; padding:8px; background:rgba(245,158,11,.1); border:1px solid rgba(245,158,11,.25); border-radius:6px; color:var(--amber); font-family:inherit; font-size:.7rem; font-weight:600; cursor:pointer; transition:all .2s; }
+  .savebtn:hover { background:rgba(245,158,11,.2); }
+
+  .toast { position:fixed; bottom:12px; left:50%; transform:translateX(-50%) translateY(60px); background:var(--card); border:1px solid var(--green); border-radius:8px; padding:10px 16px; font-size:.72rem; opacity:0; transition:all .3s; z-index:99; white-space:nowrap; }
+  .toast.show { transform:translateX(-50%) translateY(0); opacity:1; }
+  .toast.err { border-color:var(--red); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🔐 LeetCode Cookie Pusher</h1>
+  <p>Extract → Push → Solve</p>
+</div>
+
+<div class="body">
+  <div class="status" id="status">
+    <div class="sdot" id="dot"></div>
+    <div class="smsg" id="msg">Ready — click Extract to begin</div>
+  </div>
+
+  <div class="cinfo" id="cinfo">
+    <div class="crow"><span class="ck">User</span><span class="cv" id="ci-user">—</span></div>
+    <div class="crow"><span class="ck">Session</span><span class="cv" id="ci-sess">—</span></div>
+    <div class="crow"><span class="ck">CSRF</span><span class="cv" id="ci-csrf">—</span></div>
+  </div>
+
+  <div class="steps">
+    <div class="step" id="s1">
+      <div class="snum">1</div>
+      <div class="slbl">🍪 Extract Cookies</div>
+      <div class="sbdg" id="b1">Click</div>
+    </div>
+    <div class="step off" id="s2">
+      <div class="snum">2</div>
+      <div class="slbl">🚀 Push to GitHub</div>
+      <div class="sbdg" id="b2">Waiting</div>
+    </div>
+    <div class="step off" id="s3">
+      <div class="snum">3</div>
+      <div class="slbl">⚡ Trigger Solver</div>
+      <div class="sbdg" id="b3">Waiting</div>
+    </div>
+  </div>
+
+  <div class="settings">
+    <h3>⚙️ Configuration</h3>
+    <div class="field">
+      <label>GitHub PAT (repo + workflow scope)</label>
+      <input type="password" id="pat" placeholder="ghp_xxxxxxxxxxxx">
+    </div>
+    <div class="field">
+      <label>Repository</label>
+      <input type="text" id="repo" placeholder="owner/repo" value="itsyunus/LeetCode_autoSOL">
+    </div>
+    <button class="savebtn" id="saveBtn">Save Settings</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="crypto.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>
