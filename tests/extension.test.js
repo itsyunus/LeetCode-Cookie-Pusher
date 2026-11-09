@@ -44,6 +44,6 @@ test("finds a newly dispatched workflow run", () => {
 
 test("popup removes any legacy PAT from persistent local storage", () => {
   const popup = fs.readFileSync(path.join(__dirname, "..", "popup.js"), "utf8");
-  assert.match(popup, /chrome\\.storage\\.local\\.remove\\(\\["gh_pat"\\]\\)/);
-  assert.doesNotMatch(popup, /chrome\\.storage\\.local\\.set\\(\\{\\s*gh_pat/);
+  assert.ok(popup.includes('chrome.storage.local.remove(["gh_pat"])'));
+  assert.ok(!popup.includes('chrome.storage.local.set({ gh_pat'));
 });
