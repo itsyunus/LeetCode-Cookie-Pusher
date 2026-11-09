@@ -174,23 +174,31 @@ async function doTrigger() {
       : "Solver queued. It may submit the daily solution to LeetCode.");
     toast("Workflow queued.");
 
-    // GitHub's dispatch endpoint returns 204 without a run ID. Poll the runs list to expose the output link.
-    for (let attempt = 0; attempt < 8; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      const runsResponse = await fetch(
-        "https://api.github.com/repos/" + repo + "/actions/workflows/daily_solve.yml/runs?event=workflow_dispatch&branch=main&per_page=5",
-        { headers: ghHeaders(settings.pat) }
-      );
-      const runData = await core.parseJsonResponse(runsResponse, "Workflow run lookup");
-      const run = core.findWorkflowRun(runData.workflow_runs, startedAt);
-      if (run) {
-        const link = document.getElementById("run-link");
-        link.href = run.html_url;
-        link.textContent = "Open GitHub Actions run";
-        document.getElementById("run-link-wrap").classList.add("show");
-        setStatus("ok", "Workflow queued. Open the run link to watch logs, dashboard, and artifacts.");
-        break;
+    // Show a durable fallback immediately; GitHub's dispatch endpoint returns 204 without a run ID.
+    const link = document.getElementById("run-link");
+    link.href = "https://github.com/" + repo + "/actions";
+    link.textContent = "Open repository Actions";
+    document.getElementById("run-link-wrap").classList.add("show");
+
+    // Poll separately: failure to discover the run must not misreport a successful dispatch as failed.
+    try {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const runsResponse = await fetch(
+          "https://api.github.com/repos/" + repo + "/actions/workflows/daily_solve.yml/runs?event=workflow_dispatch&branch=main&per_page=5",
+          { headers: ghHeaders(settings.pat) }
+        );
+        const runData = await core.parseJsonResponse(runsResponse, "Workflow run lookup");
+        const run = core.findWorkflowRun(runData.workflow_runs, startedAt);
+        if (run) {
+          link.href = run.html_url;
+          link.textContent = "Open this GitHub Actions run";
+          setStatus("ok", "Workflow queued. Open the run link to watch logs, dashboard, and artifacts.");
+          break;
+        }
       }
+    } catch (lookupError) {
+      setStatus("ok", "Workflow was dispatched. Open repository Actions to find the run; run discovery was unavailable.");
     }
   } catch (error) {
     setStep(s3, "", "Retry");
