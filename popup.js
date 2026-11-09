@@ -1,12 +1,15 @@
-// ── State ────────────────────────────────────────────────────
-let cookies = { session: null, csrf: null, username: null };
+// Extension popup controller. Credentials stay in memory/session storage and are never logged.
+"use strict";
 
-// ── Init: Load saved settings & attach event listeners ──────
-document.addEventListener("DOMContentLoaded", () => {
-  chrome.storage.local.get(["gh_pat", "gh_repo"], (data) => {
-    if (data.gh_pat) document.getElementById("pat").value = data.gh_pat;
-    if (data.gh_repo) document.getElementById("repo").value = data.gh_repo;
-  });
+let cookies = { session: "", csrf: "", username: "" };
+let busy = false;
+const core = window.LeetCodeCookiePusherCore;
+
+document.addEventListener("DOMContentLoaded", async () => {
+  const saved = await chrome.storage.local.get(["gh_repo"]);
+  const sessionData = await chrome.storage.session.get(["gh_pat"]);
+  document.getElementById("repo").value = saved.gh_repo || "itsyunus/LeetCode_autoSOL";
+  document.getElementById("pat").value = sessionData.gh_pat || "";
 
   document.getElementById("s1").addEventListener("click", doExtract);
   document.getElementById("s2").addEventListener("click", doPush);
@@ -14,289 +17,253 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("saveBtn").addEventListener("click", saveSettings);
 });
 
-// ── Save Settings ───────────────────────────────────────────
-function saveSettings() {
-  const pat = document.getElementById("pat").value.trim();
-  const repo = document.getElementById("repo").value.trim();
-
-  if (!pat) return toast("Enter a GitHub PAT", true);
-  if (!repo || !repo.includes("/")) return toast("Enter repo as owner/repo", true);
-
-  chrome.storage.local.set({ gh_pat: pat, gh_repo: repo }, () => {
-    toast("Settings saved!");
-  });
+async function saveSettings() {
+  try {
+    const pat = document.getElementById("pat").value.trim();
+    const repo = core.validateRepository(document.getElementById("repo").value);
+    if (!pat) throw new Error("Enter a GitHub token with Actions and repository Actions-secrets write access.");
+    await chrome.storage.local.set({ gh_repo: repo });
+    await chrome.storage.session.set({ gh_pat: pat });
+    toast("Settings saved for this browser session.");
+  } catch (error) {
+    toast(error.message, true);
+  }
 }
 
-// ── Cookie Extraction Helper ────────────────────────────────
 function getCookie(name) {
-  return new Promise((resolve) => {
-    chrome.cookies.getAll({ domain: "leetcode.com", name: name }, (all) => {
-      if (all && all.length > 0) {
-        resolve(all[0].value);
-        return;
-      }
-      chrome.cookies.get({ url: "https://leetcode.com", name: name }, (c) => {
-        resolve(c ? c.value : null);
-      });
+  return new Promise((resolve, reject) => {
+    chrome.cookies.get({ url: "https://leetcode.com/", name }, (cookie) => {
+      const lastError = chrome.runtime.lastError;
+      if (lastError) return reject(new Error(lastError.message));
+      resolve(cookie ? cookie.value : "");
     });
   });
 }
 
-// ── Step 1: Extract Cookies ─────────────────────────────────
 async function doExtract() {
+  if (busy) return;
+  busy = true;
   const s1 = document.getElementById("s1");
-  if (s1.classList.contains("off")) return;
-
-  setStep(s1, "run", "Extracting...");
-  setStatus("busy", "Reading LeetCode cookies from browser...");
-
+  setStep(s1, "run", "Checking...");
+  setStatus("busy", "Checking your signed-in LeetCode session...");
   try {
-    const sessionCookie = await getCookie("LEETCODE_SESSION");
-    const csrfCookie = await getCookie("csrftoken");
+    const session = await getCookie("LEETCODE_SESSION");
+    const csrf = await getCookie("csrftoken");
+    core.requireCookiePair(session, csrf);
 
-    if (!sessionCookie) {
-      setStep(s1, "", "Click to retry");
-      setStatus("err", "No LEETCODE_SESSION cookie found — please log in on leetcode.com first!");
-      toast("Not logged in to LeetCode", true);
-      return;
-    }
-
-    cookies.session = sessionCookie;
-    cookies.csrf = csrfCookie || "";
-
-    setStatus("busy", "Validating LeetCode session...");
-
-    // Validate using LeetCode GraphQL
-    const resp = await fetch("https://leetcode.com/graphql", {
+    const response = await fetch("https://leetcode.com/graphql", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-csrftoken": cookies.csrf,
-      },
-      body: JSON.stringify({
-        query: "query { userStatus { username isSignedIn } }",
-      }),
+      headers: { "Content-Type": "application/json", "x-csrftoken": csrf },
       credentials: "include",
+      body: JSON.stringify({ query: "query { userStatus { username isSignedIn } }" })
     });
-
-    const data = await resp.json();
-    const userStatus = data?.data?.userStatus;
-
-    if (!userStatus?.isSignedIn) {
-      setStep(s1, "", "Click to retry");
-      setStatus("err", "Session expired or invalid on LeetCode. Please log in again.");
-      toast("Session expired", true);
-      return;
+    const data = await core.parseJsonResponse(response, "LeetCode session check");
+    const userStatus = data && data.data && data.data.userStatus;
+    if (!userStatus || userStatus.isSignedIn !== true) {
+      throw new Error("LeetCode session is not signed in. Log in again and retry.");
     }
 
-    cookies.username = userStatus.username || "LeetCoder";
-
-    // Show cookie info in popup
+    cookies = { session, csrf, username: userStatus.username || "LeetCode user" };
     document.getElementById("ci-user").textContent = cookies.username;
-    document.getElementById("ci-sess").textContent = cookies.session.slice(0, 24) + "...";
-    document.getElementById("ci-csrf").textContent = cookies.csrf ? "✅ Present" : "—";
+    document.getElementById("ci-sess").textContent = "Present (hidden)";
+    document.getElementById("ci-csrf").textContent = "Present";
     document.getElementById("cinfo").classList.add("show");
-
-    setStep(s1, "ok", "✅ Done");
-    setStatus("ok", `Logged in as ${cookies.username}`);
-    toast("Cookies extracted & validated!");
-
-    // Enable step 2
-    const s2 = document.getElementById("s2");
-    s2.classList.remove("off");
-    document.getElementById("b2").textContent = "Click";
-
-  } catch (err) {
-    console.error("Extract error:", err);
-    setStep(s1, "", "Click to retry");
-    setStatus("err", `Error: ${err.message}`);
-    toast("Extraction failed", true);
+    setStep(s1, "ok", "Verified");
+    setStatus("ok", "LeetCode session verified for " + cookies.username + ".");
+    enableStep("s2", "b2");
+    toast("LeetCode session verified.");
+  } catch (error) {
+    cookies = { session: "", csrf: "", username: "" };
+    setStep(s1, "", "Retry");
+    setStatus("err", error.message);
+    toast("Cookie check failed.", true);
+  } finally {
+    busy = false;
   }
 }
 
-// ── Step 2: Push to GitHub ──────────────────────────────────
 async function doPush() {
+  if (busy) return;
+  busy = true;
   const s2 = document.getElementById("s2");
-  if (s2.classList.contains("off")) return;
-
-  const settings = await getSettings();
-  if (!settings.pat) {
-    toast("Set your GitHub PAT first!", true);
-    return;
-  }
-
   setStep(s2, "run", "Pushing...");
-  setStatus("busy", "Updating GitHub Secrets via API...");
-
+  setStatus("busy", "Encrypting and updating the two GitHub Actions secrets...");
   try {
-    // 1. Get repo public key for secret encryption
-    const keyResp = await fetch(
-      `https://api.github.com/repos/${settings.repo}/actions/secrets/public-key`,
-      { headers: ghHeaders(settings.pat) }
-    );
+    core.requireCookiePair(cookies.session, cookies.csrf);
+    const settings = await getSettings();
+    const repo = core.validateRepository(settings.repo);
+    if (!settings.pat) throw new Error("Enter and save your GitHub token first.");
 
-    if (!keyResp.ok) {
-      const err = await keyResp.json().catch(() => ({}));
-      throw new Error(err.message || `GitHub API returned ${keyResp.status}`);
-    }
-
-    const keyData = await keyResp.json();
-
-    // 2. Encrypt and upload secrets
-    const secretsToUpload = {
-      LEETCODE_SESSION: cookies.session,
-      LEETCODE_CSRF_TOKEN: cookies.csrf,
-    };
-
-    let allOk = true;
-    for (const [name, val] of Object.entries(secretsToUpload)) {
-      const encrypted = encryptSecret(keyData.key, val);
-      const putResp = await fetch(
-        `https://api.github.com/repos/${settings.repo}/actions/secrets/${name}`,
-        {
-          method: "PUT",
-          headers: ghHeaders(settings.pat),
-          body: JSON.stringify({
-            encrypted_value: encrypted,
-            key_id: keyData.key_id,
-          }),
-        }
-      );
-      if (!putResp.ok) {
-        allOk = false;
-        const err = await putResp.text();
-        console.error(`Failed to update ${name}:`, err);
-      }
-    }
-
-    if (allOk) {
-      setStep(s2, "ok", "✅ Pushed");
-      setStatus("ok", "Secrets pushed to GitHub!");
-      toast("Secrets updated on GitHub!");
-
-      // Enable step 3
-      const s3 = document.getElementById("s3");
-      s3.classList.remove("off");
-      document.getElementById("b3").textContent = "Click";
-    } else {
-      setStep(s2, "", "Retry");
-      setStatus("err", "Failed to update one or more secrets.");
-      toast("Push failed", true);
-    }
-
-  } catch (err) {
-    console.error("Push error:", err);
-    setStep(s2, "", "Retry");
-    setStatus("err", `Push failed: ${err.message}`);
-    toast("Push failed", true);
-  }
-}
-
-// ── Step 3: Trigger Workflow ────────────────────────────────
-async function doTrigger() {
-  const s3 = document.getElementById("s3");
-  if (s3.classList.contains("off")) return;
-
-  const settings = await getSettings();
-  setStep(s3, "run", "Triggering...");
-  setStatus("busy", "Triggering daily solver workflow...");
-
-  try {
-    const resp = await fetch(
-      `https://api.github.com/repos/${settings.repo}/actions/workflows/daily_solve.yml/dispatches`,
-      {
-        method: "POST",
-        headers: ghHeaders(settings.pat),
-        body: JSON.stringify({ ref: "main" }),
-      }
-    );
-
-    if (resp.ok || resp.status === 204) {
-      setStep(s3, "ok", "✅ Triggered");
-      setStatus("ok", "Solver running! Check GitHub Actions.");
-      toast("Workflow started!");
-    } else {
-      const err = await resp.json().catch(() => ({}));
-      throw new Error(err.message || `Status ${resp.status}`);
-    }
-
-  } catch (err) {
-    console.error("Trigger error:", err);
-    setStep(s3, "", "Retry");
-    setStatus("err", `Trigger failed: ${err.message}`);
-    toast("Trigger failed", true);
-  }
-}
-
-// ── Libsodium Sealed Box Helper ─────────────────────────────
-function encryptSecret(base64PublicKey, secretValue) {
-  if (!window.sodiumSeal) {
-    throw new Error("Sodium encryption module not loaded");
-  }
-  const publicKey = base64ToUint8Array(base64PublicKey);
-  const messageBytes = new TextEncoder().encode(secretValue);
-  const encryptedBytes = window.sodiumSeal(messageBytes, publicKey);
-  return uint8ArrayToBase64(encryptedBytes);
-}
-
-function base64ToUint8Array(b64) {
-  const bin = atob(b64);
-  const arr = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-  return arr;
-}
-
-function uint8ArrayToBase64(arr) {
-  let bin = "";
-  for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]);
-  return btoa(bin);
-}
-
-// ── Config & Headers ────────────────────────────────────────
-function getSettings() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(["gh_pat", "gh_repo"], (data) => {
-      resolve({
-        pat: data.gh_pat || "",
-        repo: data.gh_repo || "itsyunus/LeetCode_autoSOL",
-      });
+    const keyResponse = await fetch("https://api.github.com/repos/" + repo + "/actions/secrets/public-key", {
+      headers: ghHeaders(settings.pat)
     });
-  });
+    const keyData = await core.parseJsonResponse(keyResponse, "GitHub public-key request");
+    if (!keyData.key || !keyData.key_id) throw new Error("GitHub did not return a usable repository public key.");
+
+    const values = [
+      ["LEETCODE_SESSION", cookies.session],
+      ["LEETCODE_CSRF_TOKEN", cookies.csrf]
+    ];
+    for (const [name, value] of values) {
+      const encrypted = encryptSecret(keyData.key, value);
+      const response = await fetch("https://api.github.com/repos/" + repo + "/actions/secrets/" + name, {
+        method: "PUT",
+        headers: ghHeaders(settings.pat),
+        body: JSON.stringify({ encrypted_value: encrypted, key_id: keyData.key_id })
+      });
+      if (response.status !== 201 && response.status !== 204) {
+        let message = "HTTP " + response.status;
+        try {
+          const body = await core.parseJsonResponse(response, "GitHub secret update");
+          if (body.message) message += ": " + body.message;
+        } catch (error) {
+          message = error.message;
+        }
+        throw new Error("Could not update " + name + ". " + message);
+      }
+    }
+
+    setStep(s2, "ok", "Updated");
+    setStatus("ok", "Both LeetCode secrets were updated successfully. Values were encrypted before upload.");
+    enableStep("s3", "b3");
+    toast("Both GitHub secrets updated.");
+  } catch (error) {
+    setStep(s2, "", "Retry");
+    setStatus("err", error.message);
+    toast("Secret update failed.", true);
+  } finally {
+    busy = false;
+  }
+}
+
+async function doTrigger() {
+  if (busy) return;
+  busy = true;
+  const s3 = document.getElementById("s3");
+  setStep(s3, "run", "Starting...");
+  setStatus("busy", "Dispatching the solver workflow on main...");
+  document.getElementById("run-link-wrap").classList.remove("show");
+  try {
+    const settings = await getSettings();
+    const repo = core.validateRepository(settings.repo);
+    if (!settings.pat) throw new Error("Enter and save your GitHub token first.");
+    const dryRun = document.getElementById("dry-run").checked;
+    const language = document.getElementById("language").value;
+    const payload = core.buildWorkflowDispatchInput(dryRun, language);
+    const startedAt = Date.now();
+
+    const response = await fetch("https://api.github.com/repos/" + repo + "/actions/workflows/daily_solve.yml/dispatches", {
+      method: "POST",
+      headers: ghHeaders(settings.pat),
+      body: JSON.stringify(payload)
+    });
+    if (response.status !== 204) {
+      let message = "HTTP " + response.status;
+      try {
+        const body = await core.parseJsonResponse(response, "Workflow dispatch");
+        if (body.message) message = body.message;
+      } catch (error) {
+        message = error.message;
+      }
+      throw new Error("Workflow dispatch failed: " + message);
+    }
+
+    setStep(s3, "ok", "Queued");
+    setStatus("ok", dryRun
+      ? "Dry run queued. It generates a solution and dashboard without submitting to LeetCode."
+      : "Solver queued. It may submit the daily solution to LeetCode.");
+    toast("Workflow queued.");
+
+    // GitHub's dispatch endpoint returns 204 without a run ID. Poll the runs list to expose the output link.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const runsResponse = await fetch(
+        "https://api.github.com/repos/" + repo + "/actions/workflows/daily_solve.yml/runs?event=workflow_dispatch&branch=main&per_page=5",
+        { headers: ghHeaders(settings.pat) }
+      );
+      const runData = await core.parseJsonResponse(runsResponse, "Workflow run lookup");
+      const run = core.findWorkflowRun(runData.workflow_runs, startedAt);
+      if (run) {
+        const link = document.getElementById("run-link");
+        link.href = run.html_url;
+        link.textContent = "Open GitHub Actions run";
+        document.getElementById("run-link-wrap").classList.add("show");
+        setStatus("ok", "Workflow queued. Open the run link to watch logs, dashboard, and artifacts.");
+        break;
+      }
+    }
+  } catch (error) {
+    setStep(s3, "", "Retry");
+    setStatus("err", error.message);
+    toast("Workflow trigger failed.", true);
+  } finally {
+    busy = false;
+  }
+}
+
+async function getSettings() {
+  const [localData, sessionData] = await Promise.all([
+    chrome.storage.local.get(["gh_repo"]),
+    chrome.storage.session.get(["gh_pat"])
+  ]);
+  return { repo: localData.gh_repo || "itsyunus/LeetCode_autoSOL", pat: sessionData.gh_pat || "" };
+}
+
+function encryptSecret(publicKey, value) {
+  if (!window.sodiumSeal) throw new Error("Encryption module did not load. Reload the extension.");
+  const key = base64ToUint8Array(publicKey);
+  const message = new TextEncoder().encode(value);
+  return uint8ArrayToBase64(window.sodiumSeal(message, key));
+}
+
+function base64ToUint8Array(value) {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function uint8ArrayToBase64(value) {
+  let binary = "";
+  for (let offset = 0; offset < value.length; offset += 0x8000) {
+    binary += String.fromCharCode(...value.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
 }
 
 function ghHeaders(pat) {
   return {
-    Authorization: `Bearer ${pat}`,
+    Authorization: "Bearer " + pat,
     Accept: "application/vnd.github+json",
     "Content-Type": "application/json",
-    "X-GitHub-Api-Version": "2022-11-28",
+    "X-GitHub-Api-Version": "2022-11-28"
   };
 }
 
-// ── UI Helpers ──────────────────────────────────────────────
-function setStatus(type, msg) {
-  const s = document.getElementById("status");
-  const d = document.getElementById("dot");
-  const m = document.getElementById("msg");
-  s.classList.remove("ok", "err", "busy");
-  d.classList.remove("g", "r", "p");
-  if (type === "ok") { s.classList.add("ok"); d.classList.add("g"); }
-  else if (type === "err") { s.classList.add("err"); d.classList.add("r"); }
-  else if (type === "busy") { s.classList.add("busy"); d.classList.add("p"); }
-  m.textContent = msg;
+function enableStep(stepId, badgeId) {
+  document.getElementById(stepId).classList.remove("off");
+  document.getElementById(badgeId).textContent = "Click";
 }
 
-function setStep(el, state, badge) {
-  el.classList.remove("ok", "run");
-  if (state) el.classList.add(state);
-  const id = el.id.replace("s", "b");
-  document.getElementById(id).textContent = badge;
+function setStatus(type, message) {
+  const status = document.getElementById("status");
+  const dot = document.getElementById("dot");
+  status.classList.remove("ok", "err", "busy");
+  dot.classList.remove("g", "r", "p");
+  if (type === "ok") { status.classList.add("ok"); dot.classList.add("g"); }
+  else if (type === "err") { status.classList.add("err"); dot.classList.add("r"); }
+  else if (type === "busy") { status.classList.add("busy"); dot.classList.add("p"); }
+  document.getElementById("msg").textContent = message;
 }
 
-function toast(msg, err = false) {
-  const t = document.getElementById("toast");
-  t.textContent = msg;
-  t.classList.toggle("err", err);
-  t.classList.add("show");
-  setTimeout(() => t.classList.remove("show"), 2500);
+function setStep(element, state, label) {
+  element.classList.remove("ok", "run");
+  if (state) element.classList.add(state);
+  document.getElementById(element.id.replace("s", "b")).textContent = label;
+}
+
+function toast(message, isError = false) {
+  const element = document.getElementById("toast");
+  element.textContent = message;
+  element.classList.toggle("err", isError);
+  element.classList.add("show");
+  setTimeout(() => element.classList.remove("show"), 2800);
 }
