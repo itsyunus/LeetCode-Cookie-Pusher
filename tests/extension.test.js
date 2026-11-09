@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const core = require("../extension-core.js");
 
 test("accepts an owner/repo slug and trims whitespace", () => {
@@ -38,4 +40,10 @@ test("finds a newly dispatched workflow run", () => {
   const run = { event: "workflow_dispatch", created_at: "2026-11-09T10:00:00Z", html_url: "https://github.com/run/1" };
   assert.equal(core.findWorkflowRun([run], Date.parse("2026-11-09T09:59:59Z")), run);
   assert.equal(core.findWorkflowRun([{ ...run, event: "schedule" }], Date.parse("2026-11-09T09:59:59Z")), null);
+});
+
+test("popup removes any legacy PAT from persistent local storage", () => {
+  const popup = fs.readFileSync(path.join(__dirname, "..", "popup.js"), "utf8");
+  assert.match(popup, /chrome\\.storage\\.local\\.remove\\(\\["gh_pat"\\]\\)/);
+  assert.doesNotMatch(popup, /chrome\\.storage\\.local\\.set\\(\\{\\s*gh_pat/);
 });
