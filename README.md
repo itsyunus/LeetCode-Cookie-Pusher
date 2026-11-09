@@ -1,59 +1,50 @@
-# 🔐 LeetCode Cookie Pusher — Chrome Extension
+# 🔐 LeetCode Cookie Pusher
 
-> **Zero-Friction GitHub Secret Synchronization for Automated LeetCode Solvers.**  
-> Extract authenticated cookies, encrypt with Libsodium Sealed Boxes, and push directly to GitHub Actions repository secrets in one click.
+A Chrome Manifest V3 extension that verifies your active LeetCode session, encrypts the session cookies with your GitHub repository's public key, updates GitHub Actions secrets, and dispatches the companion [LeetCode Auto-Solver](https://github.com/itsyunus/LeetCode_autoSOL) workflow.
 
----
+## Safe setup
 
-## 📸 Interface Preview
+1. Merge the companion solver's repair PR first so `.github/workflows/daily_solve.yml` on `main` includes the workflow-dispatch inputs and dashboard/log artifacts.
+2. Sign in to [LeetCode](https://leetcode.com) in the same Chrome profile.
+3. Create a fine-grained GitHub personal access token for the target repository with **Actions: Read and write**. Do not paste it into chat or commit it to a file.
+4. Load this folder in Chrome at `chrome://extensions` with Developer mode → Load unpacked.
+5. Open the extension, paste the PAT, confirm the repository is `owner/repo`, choose Python 3, and save. The PAT is kept in Chrome session storage only; it is not persisted in local storage. The LeetCode cookies remain in memory only.
+6. Click **Verify LeetCode cookies**, then **Push encrypted GitHub secrets**, then **Trigger solver workflow**.
+7. Keep **Dry run first** checked for the first test. It generates a solution and uploads the dashboard/log artifacts without submitting to LeetCode. Open the Actions run link shown by the extension to inspect the output.
 
-![Extension Screenshot](screenshot.png)
+## Required GitHub permissions
 
----
+The token needs repository **Actions: Read and write** permission. This is required both for updating Actions secrets and dispatching the workflow. The extension never reads existing secret values. It fetches only the repository's public encryption key and sends sealed-box encrypted cookie values to the GitHub secrets API.
 
-## ⚡ Daily Automation vs. Manual Refresh: How It Works
+## Secret names and workflow contract
 
-### ❓ *"Do I need to run this extension every day?"*
-**No! You do NOT need to do this daily.**
+The extension updates exactly these repository secrets:
+- `LEETCODE_SESSION`
+- `LEETCODE_CSRF_TOKEN`
 
-- **Your GitHub Actions Workflow runs 100% automatically every single day** at `00:30 UTC` via its cron schedule (`30 0 * * *`).
-- As long as the `LEETCODE_SESSION` cookie in your secrets is active, the daily solver will execute, fetch walkccc's solution database, validate tests, and commit streak entries without any manual intervention.
-- **LeetCode session cookies typically stay valid for 14 to 30 days** (as long as you do not explicitly log out of LeetCode in your browser).
-- **When do you use this extension?**  
-  Only **once every few weeks** when your LeetCode session rotates, or whenever a GitHub Action run fails with `User is not authenticated (403)`. When that happens, simply open the extension, click **Extract Cookies**, click **Push to GitHub**, and you're good for another month.
+The solver workflow reads those names, plus `GEMINI_API_KEY`. Optional email notifications use `SMTP_USER`, `SMTP_PASSWORD`, and `NOTIFICATION_EMAIL`. Configure those values separately in GitHub repository Actions secrets if you want them. The extension does not read, overwrite, or display them.
 
----
+## Troubleshooting
 
-## 🚀 Quick Setup & Installation
+- **No LeetCode cookies:** sign in to LeetCode in the same Chrome profile and reload the extension.
+- **GitHub 403/404:** check that the token has Actions read/write access and that the repository name is correct.
+- **No run link:** open the repository's Actions tab; GitHub may take a few seconds to publish the workflow run.
+- **Workflow fails for missing Gemini key:** add `GEMINI_API_KEY` to repository Actions secrets. The extension intentionally does not manage this key.
+- **Dry run:** the dashboard and logs are uploaded as run artifacts. Open the workflow run → Artifacts.
 
-### Step 1: Load Extension into Chrome
-1. Open Google Chrome and navigate to `chrome://extensions/`
-2. Toggle on **Developer mode** in the top-right corner.
-3. Click the **Load unpacked** button in the top-left corner.
-4. Select the `leetcode-cookie-ext` folder (located on your Desktop).
-5. Pin **LeetCode Cookie Pusher** to your Chrome toolbar.
+## Development
 
-### Step 2: One-Time Configuration
-1. Click the extension icon in your toolbar.
-2. In the **Configuration** section:
-   - **GitHub PAT**: Paste your GitHub Personal Access Token (requires `repo` and `workflow` scopes).
-   - **Repository**: Confirm your target repo (default: `itsyunus/LeetCode_autoSOL`).
-3. Click **Save Settings**.
+Run the offline unit tests with Node.js 20 or newer:
 
----
+```bash
+npm test
+```
 
-## 🛠️ Usage Workflow (3-Click Refresh)
+The tests cover repository validation, cookie-pair requirements, workflow dispatch payloads, API error handling, and run-link selection. Live LeetCode/GitHub operations require your own authenticated browser and token and are not mocked as a claim of live integration.
 
-Whenever your LeetCode session expires:
-1. Ensure you are signed in on [leetcode.com](https://leetcode.com).
-2. Click **1. 🍪 Extract Cookies**: The extension reads `LEETCODE_SESSION` and `csrftoken` from Chrome's cookie storage and verifies your session status against LeetCode's GraphQL API.
-3. Click **2. 🚀 Push to GitHub**: Encrypts the tokens client-side using Libsodium Curve25519 sealed boxes and commits them to your repository's Actions Secrets.
-4. Click **3. ⚡ Trigger Solver** (Optional): Immediately fires a workflow dispatch run on GitHub Actions to solve today's challenge.
+## Security notes
 
----
-
-## 🔒 Security Architecture
-
-- **No Third-Party Servers**: All operations occur locally in your browser and connect directly to `api.github.com` and `leetcode.com`.
-- **Client-Side Libsodium Sealed Box**: Secrets are encrypted in the browser using the repository's public key via X25519 + Blake2b + XSalsa20-Poly1305 before transmission over HTTPS.
-- **Chrome Storage Local**: Your GitHub PAT is saved strictly in Chrome's sandboxed local storage.
+- Secret values are never written to the page, logs, or extension storage.
+- The GitHub PAT is stored in `chrome.storage.session` and is cleared when the browser session ends.
+- Cookie values remain in popup memory only and are encrypted before upload using GitHub's repository public key.
+- The extension does not expose or update `GEMINI_API_KEY` or email credentials.
