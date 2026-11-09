@@ -6,6 +6,8 @@ let busy = false;
 const core = window.LeetCodeCookiePusherCore;
 
 document.addEventListener("DOMContentLoaded", async () => {
+  // Remove a PAT that an older extension version may have persisted in local storage.
+  await chrome.storage.local.remove(["gh_pat"]);
   const saved = await chrome.storage.local.get(["gh_repo"]);
   const sessionData = await chrome.storage.session.get(["gh_pat"]);
   document.getElementById("repo").value = saved.gh_repo || "itsyunus/LeetCode_autoSOL";
