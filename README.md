@@ -9,7 +9,7 @@ A Chrome Manifest V3 extension that verifies your active LeetCode session, encry
 3. Create a fine-grained GitHub personal access token for the target repository with **Actions: Read and write**. Do not paste it into chat or commit it to a file.
 4. Load this folder in Chrome at `chrome://extensions` with Developer mode → Load unpacked.
 5. Open the extension, paste the PAT, confirm the repository is `owner/repo`, choose Python 3, and save. The PAT is kept in Chrome session storage only; it is not persisted in local storage. The LeetCode cookies remain in memory only.
-6. Click **Verify LeetCode cookies**, then **Push encrypted GitHub secrets**, then **Trigger solver workflow**.
+6. Click **Verify LeetCode cookies**, then **Push encrypted cookie bundle**. The extension verifies the signed-in account and protected problem page, writes one encrypted GitHub secret, and automatically dispatches the solver workflow.
 7. Keep **Dry run first** checked for the first test. It generates a solution and uploads the dashboard/log artifacts without submitting to LeetCode. Open the Actions run link shown by the extension to inspect the output.
 
 ## Required GitHub permissions
@@ -18,11 +18,9 @@ The token needs repository **Actions: Read and write** permission. This is requi
 
 ## Secret names and workflow contract
 
-The extension updates exactly these repository secrets:
-- `LEETCODE_SESSION`
-- `LEETCODE_CSRF_TOKEN`
+The extension updates one canonical repository secret: `LEETCODE_COOKIE_BUNDLE`. It contains both `LEETCODE_SESSION` and `LEETCODE_CSRF_TOKEN` as a JSON pair, encrypted locally with GitHub's repository public key. A single secret write prevents session/CSRF split-brain. The solver still supports the two legacy secrets as a migration fallback, but the bundle takes precedence.
 
-The solver workflow reads those names, plus `GEMINI_API_KEY`. Optional email notifications use `SMTP_USER`, `SMTP_PASSWORD`, and `NOTIFICATION_EMAIL`. Configure those values separately in GitHub repository Actions secrets if you want them. The extension does not read, overwrite, or display them.
+The solver workflow also reads `GEMINI_API_KEY`. Optional email notifications use `SMTP_USER`, `SMTP_PASSWORD`, and `NOTIFICATION_EMAIL`. Configure those values separately in GitHub repository Actions secrets if you want them. The extension does not read, overwrite, or display them.
 
 ## Troubleshooting
 
@@ -47,4 +45,4 @@ The tests cover repository validation, cookie-pair requirements, workflow dispat
 - Secret values are never written to the page, logs, or extension storage.
 - The GitHub PAT is stored in `chrome.storage.session` and is cleared when the browser session ends.
 - Cookie values remain in popup memory only and are encrypted before upload using GitHub's repository public key.
-- The extension does not expose or update `GEMINI_API_KEY` or email credentials.
+- The extension does not expose or update `GEMINI_API_KEY`, email credentials, Telegram credentials, or Discord webhooks.
