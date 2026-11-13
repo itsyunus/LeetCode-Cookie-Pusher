@@ -23,7 +23,7 @@
     if (typeof csrf !== "string" || !csrf.trim()) {
       throw new Error("LeetCode csrftoken cookie is missing. Refresh LeetCode after signing in.");
     }
-    return { session, csrf };
+    return { session: session.trim(), csrf: csrf.trim() };
   }
 
   async function parseJsonResponse(response, operation) {

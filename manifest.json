@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LeetCode Cookie Pusher",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Extract LeetCode session cookies and push them to GitHub Secrets. One click.",
   "permissions": [
     "cookies",

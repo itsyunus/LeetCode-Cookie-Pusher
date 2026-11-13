@@ -17,6 +17,16 @@ test("requires both LeetCode cookies before upload", () => {
   assert.throws(() => core.requireCookiePair("session", ""), /csrftoken/);
   assert.throws(() => core.requireCookiePair("", "csrf"), /LEETCODE_SESSION/);
 });
+test("trims both cookie values before they are bundled and encrypted", () => {
+  assert.deepEqual(core.requireCookiePair("  session  ", "  csrf  "), { session: "session", csrf: "csrf" });
+});
+test("popup writes one bundle secret and automatically dispatches after upload", () => {
+  const popup = fs.readFileSync(path.join(__dirname, "..", "popup.js"), "utf8");
+  assert.ok(popup.includes('actions/secrets/LEETCODE_COOKIE_BUNDLE'));
+  assert.ok(popup.includes('await doTrigger();'));
+  assert.ok(!popup.includes('actions/secrets/LEETCODE_SESSION'));
+  assert.ok(!popup.includes('actions/secrets/LEETCODE_CSRF_TOKEN'));
+});
 test("dispatch defaults to dry-run when requested and rejects unknown languages", () => {
   assert.deepEqual(core.buildWorkflowDispatchInput(true, "python3"), {
     ref: "main", inputs: { dry_run: "true", language: "python3" }

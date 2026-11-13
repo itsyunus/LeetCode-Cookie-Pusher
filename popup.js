@@ -49,9 +49,24 @@ async function doExtract() {
   setStep(s1, "run", "Checking...");
   setStatus("busy", "Checking your signed-in LeetCode session...");
   try {
-    const session = await getCookie("LEETCODE_SESSION");
-    const csrf = await getCookie("csrftoken");
-    core.requireCookiePair(session, csrf);
+    const rawSession = await getCookie("LEETCODE_SESSION");
+    const rawCsrf = await getCookie("csrftoken");
+    const pair = core.requireCookiePair(rawSession, rawCsrf);
+    const session = pair.session;
+    const csrf = pair.csrf;
+
+    // Check the protected problem page from this browser before accepting the pair.
+    const problemPage = await fetch("https://leetcode.com/problems/two-sum/", {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store"
+    });
+    const pageText = await problemPage.text();
+    const pageLower = pageText.slice(0, 12000).toLowerCase();
+    if (!problemPage.ok || (problemPage.status === 503) ||
+        ["just a moment", "cf-chl-", "challenge-platform", "verify you are human"].some(marker => pageLower.includes(marker))) {
+      throw new Error("LeetCode/Cloudflare blocked the protected-page check. Sign in again in this browser and retry.");
+    }
 
     const response = await fetch("https://leetcode.com/graphql", {
       method: "POST",
@@ -89,7 +104,7 @@ async function doPush() {
   busy = true;
   const s2 = document.getElementById("s2");
   setStep(s2, "run", "Pushing...");
-  setStatus("busy", "Encrypting and updating the two GitHub Actions secrets...");
+  setStatus("busy", "Encrypting and updating the single cookie-bundle secret...");
   try {
     core.requireCookiePair(cookies.session, cookies.csrf);
     const settings = await getSettings();
@@ -102,33 +117,34 @@ async function doPush() {
     const keyData = await core.parseJsonResponse(keyResponse, "GitHub public-key request");
     if (!keyData.key || !keyData.key_id) throw new Error("GitHub did not return a usable repository public key.");
 
-    const values = [
-      ["LEETCODE_SESSION", cookies.session],
-      ["LEETCODE_CSRF_TOKEN", cookies.csrf]
-    ];
-    for (const [name, value] of values) {
-      const encrypted = encryptSecret(keyData.key, value);
-      const response = await fetch("https://api.github.com/repos/" + repo + "/actions/secrets/" + name, {
-        method: "PUT",
-        headers: ghHeaders(settings.pat),
-        body: JSON.stringify({ encrypted_value: encrypted, key_id: keyData.key_id })
-      });
-      if (response.status !== 201 && response.status !== 204) {
-        let message = "HTTP " + response.status;
-        try {
-          const body = await core.parseJsonResponse(response, "GitHub secret update");
-          if (body.message) message += ": " + body.message;
-        } catch (error) {
-          message = error.message;
-        }
-        throw new Error("Could not update " + name + ". " + message);
+    const bundle = JSON.stringify({
+      LEETCODE_SESSION: cookies.session.trim(),
+      LEETCODE_CSRF_TOKEN: cookies.csrf.trim()
+    });
+    const encrypted = encryptSecret(keyData.key, bundle);
+    const response = await fetch("https://api.github.com/repos/" + repo + "/actions/secrets/LEETCODE_COOKIE_BUNDLE", {
+      method: "PUT",
+      headers: ghHeaders(settings.pat),
+      body: JSON.stringify({ encrypted_value: encrypted, key_id: keyData.key_id })
+    });
+    if (response.status !== 201 && response.status !== 204) {
+      let message = "HTTP " + response.status;
+      try {
+        const body = await core.parseJsonResponse(response, "GitHub cookie-bundle secret update");
+        if (body.message) message += ": " + body.message;
+      } catch (error) {
+        message = error.message;
       }
+      throw new Error("Could not update LEETCODE_COOKIE_BUNDLE. " + message);
     }
 
     setStep(s2, "ok", "Updated");
-    setStatus("ok", "Both LeetCode secrets were updated successfully. Values were encrypted before upload.");
-    enableStep("s3", "b3");
-    toast("Both GitHub secrets updated.");
+    setStatus("ok", "Verified cookie pair saved as one encrypted GitHub secret.");
+    enableStep("s3", "Ready");
+    toast("Cookie bundle updated. Starting the solver workflow...");
+    // One tap: immediately dispatch the selected dry-run/live workflow.
+    busy = false;
+    await doTrigger();
   } catch (error) {
     setStep(s2, "", "Retry");
     setStatus("err", error.message);
