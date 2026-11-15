@@ -59,20 +59,6 @@ test("popup removes any legacy PAT from persistent local storage", () => {
 });
 
 
-test("uses the cookie pair re-read after a rotation during verification", async () => {
-  let reads = 0;
-  const result = await core.verifyStableCookiePair(
-    async () => (++reads === 1
-      ? { session: "old-session", csrf: "old-csrf" }
-      : { session: "new-session", csrf: "new-csrf" }),
-    async (pair) => {
-      assert.equal(pair.session, "old-session");
-      return { isSignedIn: true, username: "yunus" };
-    }
-  ).catch((error) => error);
-  assert.match(result.message, /rotated its cookies repeatedly/);
-});
-
 test("re-verifies and returns the latest cookie pair after rotation", async () => {
   let reads = 0;
   const verifiedPairs = [];
@@ -84,9 +70,20 @@ test("re-verifies and returns the latest cookie pair after rotation", async () =
       verifiedPairs.push(pair.session);
       return { isSignedIn: true, username: "yunus" };
     }
-  ).catch((error) => error);
-  assert.match(result.message, /rotated its cookies repeatedly/);
-  assert.deepEqual(verifiedPairs, ["old-session", "new-session", "new-session"]);
+  );
+  assert.deepEqual(verifiedPairs, ["old-session", "new-session"]);
+  assert.deepEqual(result, { session: "new-session", csrf: "new-csrf", username: "yunus" });
+});
+
+test("fails safely when cookies keep rotating during verification", async () => {
+  let reads = 0;
+  await assert.rejects(
+    core.verifyStableCookiePair(
+      async () => ({ session: "session-" + (++reads), csrf: "csrf-" + reads }),
+      async () => ({ isSignedIn: true, username: "yunus" })
+    ),
+    /rotated its cookies repeatedly/
+  );
 });
 
 test("returns a stable verified cookie pair when Chrome cookie values do not change", async () => {
