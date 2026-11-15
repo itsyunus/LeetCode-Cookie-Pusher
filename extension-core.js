@@ -62,7 +62,30 @@
     return eligible[0] || null;
   }
 
-  const api = { validateRepository, requireCookiePair, parseJsonResponse, buildWorkflowDispatchInput, findWorkflowRun };
+  // Read, verify, and re-read cookies so a LeetCode Set-Cookie rotation during
+  // verification cannot leave us uploading the stale pre-request snapshot.
+  async function verifyStableCookiePair(readPair, verifyPair, maxAttempts = 3) {
+    if (typeof readPair !== "function" || typeof verifyPair !== "function") {
+      throw new Error("Cookie reader and verifier are required.");
+    }
+    const initial = await readPair();
+    let candidate = requireCookiePair(initial.session, initial.csrf);
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const verification = await verifyPair(candidate);
+      if (!verification || verification.isSignedIn !== true) {
+        throw new Error("LeetCode session is not signed in. Log in again and retry.");
+      }
+      const latestRaw = await readPair();
+      const latest = requireCookiePair(latestRaw.session, latestRaw.csrf);
+      if (latest.session === candidate.session && latest.csrf === candidate.csrf) {
+        return { ...candidate, username: verification.username || "LeetCode user" };
+      }
+      candidate = latest;
+    }
+    throw new Error("LeetCode rotated its cookies repeatedly during verification. Retry extraction.");
+  }
+
+  const api = { validateRepository, requireCookiePair, parseJsonResponse, buildWorkflowDispatchInput, findWorkflowRun, verifyStableCookiePair };
   root.LeetCodeCookiePusherCore = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

@@ -57,3 +57,49 @@ test("popup removes any legacy PAT from persistent local storage", () => {
   assert.ok(popup.includes('chrome.storage.local.remove(["gh_pat"])'));
   assert.ok(!popup.includes('chrome.storage.local.set({ gh_pat'));
 });
+
+
+test("re-verifies and returns the latest cookie pair after rotation", async () => {
+  let reads = 0;
+  const verifiedPairs = [];
+  const result = await core.verifyStableCookiePair(
+    async () => (++reads === 1
+      ? { session: "old-session", csrf: "old-csrf" }
+      : { session: "new-session", csrf: "new-csrf" }),
+    async (pair) => {
+      verifiedPairs.push(pair.session);
+      return { isSignedIn: true, username: "yunus" };
+    }
+  );
+  assert.deepEqual(verifiedPairs, ["old-session", "new-session"]);
+  assert.deepEqual(result, { session: "new-session", csrf: "new-csrf", username: "yunus" });
+});
+
+test("fails safely when cookies keep rotating during verification", async () => {
+  let reads = 0;
+  await assert.rejects(
+    core.verifyStableCookiePair(
+      async () => ({ session: "session-" + (++reads), csrf: "csrf-" + reads }),
+      async () => ({ isSignedIn: true, username: "yunus" })
+    ),
+    /rotated its cookies repeatedly/
+  );
+});
+
+test("returns a stable verified cookie pair when Chrome cookie values do not change", async () => {
+  const result = await core.verifyStableCookiePair(
+    async () => ({ session: "stable-session", csrf: "stable-csrf" }),
+    async () => ({ isSignedIn: true, username: "yunus" })
+  );
+  assert.deepEqual(result, { session: "stable-session", csrf: "stable-csrf", username: "yunus" });
+});
+
+test("does not return cookies when LeetCode rejects authentication", async () => {
+  await assert.rejects(
+    core.verifyStableCookiePair(
+      async () => ({ session: "session", csrf: "csrf" }),
+      async () => ({ isSignedIn: false })
+    ),
+    /not signed in/
+  );
+});

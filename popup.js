@@ -49,13 +49,7 @@ async function doExtract() {
   setStep(s1, "run", "Checking...");
   setStatus("busy", "Checking your signed-in LeetCode session...");
   try {
-    const rawSession = await getCookie("LEETCODE_SESSION");
-    const rawCsrf = await getCookie("csrftoken");
-    const pair = core.requireCookiePair(rawSession, rawCsrf);
-    const session = pair.session;
-    const csrf = pair.csrf;
-
-    // Check the protected problem page from this browser before accepting the pair.
+    // Check the protected problem page before trusting any cookie pair.
     const problemPage = await fetch("https://leetcode.com/problems/two-sum/", {
       method: "GET",
       credentials: "include",
@@ -63,24 +57,32 @@ async function doExtract() {
     });
     const pageText = await problemPage.text();
     const pageLower = pageText.slice(0, 12000).toLowerCase();
-    if (!problemPage.ok || (problemPage.status === 503) ||
+    if (!problemPage.ok || problemPage.status === 503 ||
         ["just a moment", "cf-chl-", "challenge-platform", "verify you are human"].some(marker => pageLower.includes(marker))) {
       throw new Error("LeetCode/Cloudflare blocked the protected-page check. Sign in again in this browser and retry.");
     }
 
-    const response = await fetch("https://leetcode.com/graphql", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-csrftoken": csrf },
-      credentials: "include",
-      body: JSON.stringify({ query: "query { userStatus { username isSignedIn } }" })
-    });
-    const data = await core.parseJsonResponse(response, "LeetCode session check");
-    const userStatus = data && data.data && data.data.userStatus;
-    if (!userStatus || userStatus.isSignedIn !== true) {
-      throw new Error("LeetCode session is not signed in. Log in again and retry.");
-    }
-
-    cookies = { session, csrf, username: userStatus.username || "LeetCode user" };
+    // The protected-page and GraphQL requests can rotate cookies. The helper
+    // verifies a snapshot and then re-reads Chrome's cookie jar before upload.
+    const verified = await core.verifyStableCookiePair(
+      async () => ({
+        session: await getCookie("LEETCODE_SESSION"),
+        csrf: await getCookie("csrftoken")
+      }),
+      async (pair) => {
+        const response = await fetch("https://leetcode.com/graphql", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-csrftoken": pair.csrf },
+          credentials: "include",
+          cache: "no-store",
+          body: JSON.stringify({ query: "query { userStatus { username isSignedIn } }" })
+        });
+        const data = await core.parseJsonResponse(response, "LeetCode session check");
+        const userStatus = data && data.data && data.data.userStatus;
+        return userStatus || { isSignedIn: false };
+      }
+    );
+    cookies = { session: verified.session, csrf: verified.csrf, username: verified.username };
     document.getElementById("ci-user").textContent = cookies.username;
     document.getElementById("ci-sess").textContent = "Present (hidden)";
     document.getElementById("ci-csrf").textContent = "Present";
