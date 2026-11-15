@@ -57,3 +57,52 @@ test("popup removes any legacy PAT from persistent local storage", () => {
   assert.ok(popup.includes('chrome.storage.local.remove(["gh_pat"])'));
   assert.ok(!popup.includes('chrome.storage.local.set({ gh_pat'));
 });
+
+
+test("uses the cookie pair re-read after a rotation during verification", async () => {
+  let reads = 0;
+  const result = await core.verifyStableCookiePair(
+    async () => (++reads === 1
+      ? { session: "old-session", csrf: "old-csrf" }
+      : { session: "new-session", csrf: "new-csrf" }),
+    async (pair) => {
+      assert.equal(pair.session, "old-session");
+      return { isSignedIn: true, username: "yunus" };
+    }
+  ).catch((error) => error);
+  assert.match(result.message, /rotated its cookies repeatedly/);
+});
+
+test("re-verifies and returns the latest cookie pair after rotation", async () => {
+  let reads = 0;
+  const verifiedPairs = [];
+  const result = await core.verifyStableCookiePair(
+    async () => (++reads === 1
+      ? { session: "old-session", csrf: "old-csrf" }
+      : { session: "new-session", csrf: "new-csrf" }),
+    async (pair) => {
+      verifiedPairs.push(pair.session);
+      return { isSignedIn: true, username: "yunus" };
+    }
+  ).catch((error) => error);
+  assert.match(result.message, /rotated its cookies repeatedly/);
+  assert.deepEqual(verifiedPairs, ["old-session", "new-session", "new-session"]);
+});
+
+test("returns a stable verified cookie pair when Chrome cookie values do not change", async () => {
+  const result = await core.verifyStableCookiePair(
+    async () => ({ session: "stable-session", csrf: "stable-csrf" }),
+    async () => ({ isSignedIn: true, username: "yunus" })
+  );
+  assert.deepEqual(result, { session: "stable-session", csrf: "stable-csrf", username: "yunus" });
+});
+
+test("does not return cookies when LeetCode rejects authentication", async () => {
+  await assert.rejects(
+    core.verifyStableCookiePair(
+      async () => ({ session: "session", csrf: "csrf" }),
+      async () => ({ isSignedIn: false })
+    ),
+    /not signed in/
+  );
+});
